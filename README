@@ -1,0 +1,80 @@
+How to use wireframe
+====================
+
+An instance of the class 'Application' (or a subclass of it) must be set
+as a module-level variable called 'application' for use by WSGI.
+
+<code>
+    from wireframe import Application
+
+    def home(request, response):
+        response['Content-Type'] = 'text/plain'
+        response.append('example home')
+        return response
+
+    application = Application()
+    application.add_map(r'^/?$', GET=home)
+</code>
+
+When using 'mod_wsgi' with Apache, configure 'WSGIScriptAlias' to point
+to the script containing the 'application' variable.
+
+<code>
+	WSGIDaemonProcess processname user=username processes=4 threads=4 display-name=%{GROUP}
+	WSGIProcessGroup processname
+	WSGIPassAuthorization On
+
+	<Directory "/wherever/wireframe/example">
+		Order allow,deny
+		Allow from all
+	</Directory>
+
+	WSGIScriptAlias /example /wherever/wireframe/example/application.py
+</code>
+
+How wireframe works
+===================
+
+Each HTTP request is processed by the '__call__' method of the
+Application instance in the following way:
+
+1) The list of tuples (url_matcher, handler) in attribute 'url_handlers'
+   is searched for a match to the given URL (the PATH_INFO entry in
+   WSGI 'environ'). This is a linear search in the order the handlers were
+   added. If no match is found, then HTTP status '404 Not Found' is returned.
+
+2) A Request instance is created, containing the data (headers and body)
+   sent by the web client. If the URL regexp contains variables, then
+   the values are set as attributes in the Request instance.
+
+3) Get the handler for the HTTP method. This is either a dictionary mapping
+   HTTP methods to processor(s) (added by 'application.add_map'),
+   or a dispatcher class (added by 'application.add_class').
+
+4) If the handler is a dictionary, then get the item for the HTTP method.
+   If no such item, then return HTTP status '405 Method Not Allowed'.
+   The item is either a single processor or a sequence of processors.
+   A processor is a callable such that 'processor(request, response)'
+   can be invoked.
+   The processor(s) are called with the Request and Response instances as
+   arguments. If there is a sequence of processors, then the first processor
+   is given a clean-slate instance of the Response class. This is then
+   passed to each invocation of the processors. Each processor may
+   modify the Response instance by adding or modifying its attributes.
+
+5) If the handler is a dispatcher class, then instantiate it.
+   If the dispatcher instance is callable (i.e. the class implements the
+   '__call__' method), then it is called by 'instance(request, response)',
+   and it must itself handle the HTTP request appropriately.
+   If the instance is not callable, then it must provide methods named
+   for the HTTP methods it is supposed to handle, which are called by
+   'instance.METHOD(request, response)'.
+   If no such method, then return HTTP status '405 Method Not Allowed'.
+
+6) A handler may raise a HTTP_STATUS exception at any time. This will
+   break the sequence of processor calls. The HTTP_STATUS exception
+   classes are subclasses of Response.
+
+7) The data contained in the Response instance (exception or normal)
+   from the last processor is sent as response to the client.
+   This includes headers and body.
