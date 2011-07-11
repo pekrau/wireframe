@@ -1,18 +1,21 @@
 """ wireframe: Minimalistic Web Resource Framework built on Python WSGI.
 
 Application class for Python WSGI.
-
-Per Kraulis
-2009-10-31
-2009-11-29  allow dispatcher class, in addition to method-processors maps
-2010-01-20  added options for human-readable error and debug output
 """
 
-import sys, re, traceback, cgi, logging
+import sys
+import re
+import traceback
+import cgi
+import logging
 
 from .request import Request
-from .response import (Response, HTTP_NOT_FOUND, HTTP_METHOD_NOT_ALLOWED,
-                       HTTP_ERROR, HTTP_UNAUTHORIZED, HTTP_STATUS)
+from .response import (Response,
+                       HTTP_NOT_FOUND,
+                       HTTP_METHOD_NOT_ALLOWED,
+                       HTTP_ERROR,
+                       HTTP_UNAUTHORIZED,
+                       HTTP_STATUS)
 
 
 HTTP_METHODS = set(['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'])
@@ -26,21 +29,30 @@ class Application(object):
     (or a subclass of it) must be set as the module-level variable
     'application', as specified for your WSGI implementation.
 
-    The 'path_matcher' specified in calls to 'add_class' and 'add_map'
-    must be a callable or a regular expression string. If it is a callable,
-    it must take one single string as argument, which is the URL path for
-    the HTTP request. It must produce a non-False result on successful
-    match. The result will be provided to the Request instance as
-    attribute 'path_values'.
+    The 'path_matcher' specified in calls to 'add_dispatcher' and 'add_map'
+    must be a callable or a string.
 
-    If the URL path matcher is a string, it is compiled into a regexp,
-    whose groups will be provided to the Request instance as 'path_values'
-    (list of unnamed groups) and 'path_named_values' (dictionary of
-    named groups)."""
+    If it is a callable, it must take one single string as argument,
+    which is the URL path for the HTTP request. It must produce a non-False
+    result on successful match. The result will be provided to the Request
+    instance as attribute 'path_values'.
+
+    If it is a string, it is interpreted as a regular expression, which
+    is compiled into a regexp, whose groups will be provided to the Request
+    instance as 'path_values' (list of unnamed groups) and 'path_named_values'
+    (dictionary of named groups).
+
+    If it is a string beginning with 'template:', the rest of the string
+    is interpreted as a URI template, where each variable is converted into
+    a regular expression named group.
+    """
+
+    TEMPLATE_REGEXP = re.compile(r'\{([^/\}]+)\}')
 
     def __init__(self, human_error_output=True, human_debug_output=False):
         """Set error and debug output flags for when the user agent
-        appears to represent a human user, i.e. a browser."""
+        appears to represent a human user, i.e. a browser.
+        """
         self.human_error_output = human_error_output
         self.human_debug_output = human_debug_output
         self.path_handlers = []  # Tuples (URL path matcher, handler),
@@ -58,35 +70,49 @@ class Application(object):
         attributes to instances input to it.
 
         A single processor, or a sequence (tuple or list) of processors,
-        may be given for a given HTTP method."""
+        may be given for a given HTTP method.
+        """
         if isinstance(path_matcher, basestring):
+            path_matcher = self.template_convert(path_matcher)
             path_matcher = re.compile(path_matcher)
         method_map = dict([(m.upper(), p) for m,p in method_map.items()])
         self.path_handlers.append((path_matcher, method_map))
 
-    def add_class(self, path_matcher, dispatcher_class):
+    def add_dispatcher(self, path_matcher, dispatcher):
         """Add a URL path matcher with a dispatcher class.
 
         For valid 'path_matcher' values, see the documentation for this class.
 
-        The dispatcher class must either be a callable, or it must provide
-        the appropriate method(s) named for the HTTP methods it is to handle.
-        Such a method will be called with the Request and Response instances
-        as arguments."""
-        assert isinstance(dispatcher_class, object)
+        An instance of the dispatcher class must either be a callable,
+        or it must provide the appropriate method(s) named for the HTTP
+        methods it is to handle. Such a method will be called with
+        the Request and Response instances as arguments.
+        """
+        assert isinstance(dispatcher, object)
         if isinstance(path_matcher, basestring):
+            path_matcher = self.template_convert(path_matcher)
             path_matcher = re.compile(path_matcher)
-        self.path_handlers.append((path_matcher, dispatcher_class))
+        self.path_handlers.append((path_matcher, dispatcher))
+
+    def template_convert(self, template):
+        "Convert a URI template into a regular expression using named groups."
+        if not template.startswith('template:'): return template
+        template = template[len('template:'):]
+        return "^%s$" % self.TEMPLATE_REGEXP.sub(self.template_replace,template)
+
+    def template_replace(self, match):
+        return "(?P<%s>[^/]+)" % match.group(1)
 
     def __call__(self, environ, start_response):
         """WSGI interface; this is called for each HTTP request.
         The HTTP request is dispatched to the appropriate processor or
         dispatcher by finding the correct URL path matcher (defined by
-        previous calls to 'add_map' or 'add_class') for the given URL path
-        and HTTP method.
+        previous calls to 'add_map' or 'add_dispatcher') for the given
+        URL path and HTTP method.
         NOTE: The URL path value used for matching is taken from
         the PATH_INFO environment variable, thus excluding any path
-        prefix for the virtual location of the Python WSGI application."""
+        prefix for the virtual location of the Python WSGI application.
+        """
         path = environ['PATH_INFO']
         logging.debug("wireframe: request URL path %s", path)
         try:
@@ -125,15 +151,15 @@ class Application(object):
                 else:
                     processors(request, response) # Not a seq: single callable
             elif isinstance(handler, object):     # Dispatcher class
-                processor = handler()
-                if callable(processor):           # Does its own method dispatch
-                    processor(request, response)
+                dispatcher = handler()
+                if callable(dispatcher):          # Does its own method dispatch
+                    dispatcher(request, response)
                 else:
                     try:
-                        method = getattr(processor, request.http_method)
+                        method = getattr(dispatcher, request.http_method)
                     except AttributeError:
                         allowed = [m for m in HTTP_METHODS
-                                   if hasattr(processor, m)]
+                                   if hasattr(dispatcher, m)]
                         raise HTTP_METHOD_NOT_ALLOWED(allow=','.join(allowed))
                     method(request, response)
             else:
@@ -184,10 +210,12 @@ class Application(object):
 
     def get_request(self, environ, path_values, path_named_values):
         """Return a Request instance.
-        May be redefined to return an instance of a Request subclass."""
+        May be redefined to return an instance of a Request subclass.
+        """
         return Request(environ, path_values, path_named_values)
 
     def get_response(self):
         """Return a Response instance.
-        May be redefined to return an instance of a Response subclass."""
+        May be redefined to return an instance of a Response subclass.
+        """
         return Response()

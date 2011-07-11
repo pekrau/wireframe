@@ -76,7 +76,7 @@ application.add_map(r'^/login$', GET=[BasicAuthenticate(realm='example'),
                                       EchoProcessor()])
 
 # A Dispatcher class for handling all methods for a URL
-application.add_class(r'^/page$', Dispatcher)
+application.add_dispatcher(r'^/page$', Dispatcher)
 
 # Using a predefined processor: a callable class instance
 application.add_map(r'^/file/.+$',

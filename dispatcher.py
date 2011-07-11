@@ -15,10 +15,10 @@ class BaseDispatcher(object):
     Elaborate this class by implementing methods named for the
     HTTP request methods to be handled by this dispatcher. 
     The name of HTTP request method is used to identify the class
-    method to call. That is, if the HTTP method is 'GET', then
-    the class method 'GET' will be used to handle it.
-    The class methods are given the Request and Response instances
-    as arguments."""
+    method to call. That is, if the HTTP request is 'GET', then
+    the GET method will be called with the Request and Response
+    instances arguments.
+    """
 
     def __call__(self, request, response):
         """The name of HTTP request method is used to identify
